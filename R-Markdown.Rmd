@@ -8,18 +8,29 @@ output: html_document
 ```{r}
 library(dplyr)
 library(caret)
-
+library(tidyr)
 ```
 
 ```{r}
 #insert pathway you have the data saved
 
-list.files(path = '/Users/antfe/OneDrive/Desktop/Reds Hackathon/')
+#list.files(path = '/Desktop/Reds Hackathon/')
 ```
 ```{r}
-lahman_people_data <- read.csv('/Users/antfe/OneDrive/Desktop/Reds Hackathon/lahman_people.csv')
-savant_pitch_by_pitch <- read.csv('/Users/antfe/OneDrive/Desktop/Reds Hackathon/savant_data_2021_2023.csv')
-sample_submission <- read.csv('/Users/antfe/OneDrive/Desktop/Reds Hackathon/sample_submission.csv')
+#lahman_people_data <- read.csv('Desktop/Reds Hackathon/lahman_people.csv')
+#savant_pitch_by_pitch <- read.csv('Desktop/Reds Hackathon/savant_data_2021_2023.csv')
+#sample_submission <- read.csv('Desktop/Reds Hackathon/sample_submission.csv')
+
+# Saving to .rds
+#saveRDS(read.csv('Desktop/Reds Hackathon/sample_submission.csv'), "sample_submission.rds")
+#saveRDS(read.csv('Desktop/Reds Hackathon/savant_data_2021_2023.csv'), "savant_pitch_by_pitch.rds")
+#saveRDS(read.csv('Desktop/Reds Hackathon/lahman_people.csv'), "lahman_people.rds")
+
+# Loading .rds
+sample_submission <- readRDS("sample_submission.rds")
+savant_pitch_by_pitch <- readRDS("savant_pitch_by_pitch.rds")
+lahman_people <- readRDS("lahman_people.rds")
+
 ```
 
 ```{r}
@@ -30,6 +41,10 @@ head(sample_submission)
 
 
 
+
+
+
+Initial Thoughts and Looking at Data
 
 ```{r}
 plate_appearances <- 
@@ -134,8 +149,6 @@ combined_playing_time <-
     ungroup()
 ```
 
-
-
 ```{r}
 combined_with_attributes <- combined_playing_time %>%
     left_join(
@@ -175,7 +188,6 @@ ggplot(model_data, aes(x = age_group, y = PLAYING_TIME, fill = age_group)) +
 
 ```
 
-
 ```{r}
 library(corrplot)
 corr_matrix <- cor(model_data %>% select(PLAYING_TIME, height, weight, age))
@@ -189,5 +201,97 @@ rf_model <- randomForest(PLAYING_TIME ~ ., data = model_data, ntree = 500)
 varImpPlot(rf_model)
 
 ```
+
+
+
+
+Hitters PA
+```{r}
+colnames(savant_pitch_by_pitch)
+```
+
+```{r}
+calculate_player_batting_averages <- function(data) {
+  # Filter for valid events that count as at-bats
+  data <- data %>%
+    filter(!is.na(events) & events %in% c("single", "double", "triple", "home_run", "strikeout", "groundout", "flyout"))
+  
+  # Add a column to identify "hits"
+  data <- data %>%
+    mutate(hit = ifelse(events %in% c("single", "double", "triple", "home_run"), 1, 0))
+  
+  # Arrange data by batter and game_date
+  data <- data %>%
+    arrange(batter, game_date)
+  
+  # Add a consecutive games counter
+  data <- data %>%
+    group_by(batter) %>%
+    mutate(
+      consecutive_games = cumsum(c(1, diff(as.Date(game_date)) > 1))
+    ) %>%
+    ungroup()
+  
+  # Summarize data by batter and consecutive game streak
+  streak_stats <- data %>%
+    group_by(batter, consecutive_games) %>%
+    summarize(
+      games_in_streak = n_distinct(game_date),
+      total_hits = sum(hit, na.rm = TRUE),
+      total_at_bats = sum(at_bat_number, na.rm = TRUE),
+      batting_average = ifelse(total_at_bats > 0, total_hits / total_at_bats, NA),
+      .groups = "drop"
+    )
+  
+  # Bin the data by streak length and calculate batting averages per bin
+  streak_bins <- streak_stats %>%
+    mutate(
+      game_bin = case_when(
+        games_in_streak == 2 ~ "2 games",
+        games_in_streak == 4 ~ "4 games",
+        games_in_streak == 6 ~ "6 games",
+        games_in_streak == 8 ~ "8 games",
+        games_in_streak >= 10 ~ "10+ games",
+        TRUE ~ NA_character_
+      )
+    ) %>%
+    filter(!is.na(game_bin))
+  
+  # Calculate batting averages for each player and bin
+  player_averages <- streak_bins %>%
+    group_by(batter, game_bin) %>%
+    summarize(
+      avg_batting_average = mean(batting_average, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    pivot_wider(
+      names_from = game_bin,
+      values_from = avg_batting_average,
+      names_prefix = "BA_"
+    )
+  
+  # Rename columns for clarity
+  colnames(player_averages) <- c(
+    "Batter_ID", "2_Game_BA", "4_Game_BA", "6_Game_BA", "8_Game_BA", "10+_Game_BA"
+  )
+  
+  return(player_averages)
+}
+
+
+```
+
+
+```{r}
+result <- calculate_player_batting_averages(savant_pitch_by_pitch)
+print(result)
+
+```
+
+
+```{r}
+length(unique(savant_pitch_by_pitch$batter))
+```
+
 
 
