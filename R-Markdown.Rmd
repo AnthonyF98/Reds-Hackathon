@@ -1,0 +1,193 @@
+---
+title: "Red's Hackathon"
+author: "Anthony Fernandez/Paul Trusela/Stefan Lechmanik/Drew Duffy"
+date: "2025-01-22"
+output: html_document
+---
+
+```{r}
+library(dplyr)
+library(caret)
+
+```
+
+```{r}
+#insert pathway you have the data saved
+
+list.files(path = '/Users/antfe/OneDrive/Desktop/Reds Hackathon/')
+```
+```{r}
+lahman_people_data <- read.csv('/Users/antfe/OneDrive/Desktop/Reds Hackathon/lahman_people.csv')
+savant_pitch_by_pitch <- read.csv('/Users/antfe/OneDrive/Desktop/Reds Hackathon/savant_data_2021_2023.csv')
+sample_submission <- read.csv('/Users/antfe/OneDrive/Desktop/Reds Hackathon/sample_submission.csv')
+```
+
+```{r}
+head(lahman_people_data)
+head(savant_pitch_by_pitch)
+head(sample_submission)
+```
+
+
+
+
+```{r}
+plate_appearances <- 
+    # start with the savant data
+    savant_pitch_by_pitch %>%
+    # we will group by batter, season, game, and at bat and preserve the 
+    group_by(
+        batter,
+        game_year,
+        game_pk,
+        at_bat_number
+    ) %>%
+    summarise() %>%
+    ungroup() %>%
+    # now we have just unique batter, season, game, and at bat observations
+    # but, we need to count how many of those there are each season
+    # so, we will do another group by and summarise
+    group_by(
+        batter,
+        game_year
+    ) %>%
+    summarise(
+        # the n() function counts the number of unique observations we have
+        playing_time = n()
+    ) %>%
+    ungroup()
+```
+
+```{r}
+plate_appearances_averages <-
+    plate_appearances %>%
+    # group by batters so we can get the average playing time for each
+    group_by(
+        batter
+    ) %>%
+    summarise(
+        # round this average to get a whole number value
+        playing_time = round(mean(playing_time), 0)
+    ) %>%
+    ungroup()
+```
+
+
+```{r}
+batters_faced_averages <- 
+    # start with the savant data
+    savant_pitch_by_pitch %>%
+    # we will group by batter, season, game, and at bat and preserve the 
+    group_by(
+        pitcher,
+        game_year,
+        game_pk,
+        at_bat_number
+    ) %>%
+    summarise() %>%
+    ungroup() %>%
+    # now we have just unique batter, season, game, and at bat observations
+    # but, we need to count how many of those there are each season
+    # so, we will do another group by and summarise
+    group_by(
+        pitcher,
+        game_year
+    ) %>%
+    summarise(
+        # the n() function counts the number of unique observations we have
+        playing_time = n()
+    ) %>%
+    ungroup() %>%
+    # we can also move directly onto the final counting step without breaking it up
+    group_by(
+        pitcher
+    ) %>%
+    summarise(
+        playing_time = round(mean(playing_time), 0)
+    ) %>%
+    ungroup()
+```
+
+```{r}
+combined_playing_time <-
+    plate_appearances_averages %>%
+    # rename the columns now so that both data frames have the same names and they match what Kaggle expects
+    rename(
+        PLAYER_ID = batter,
+        PLAYING_TIME = playing_time
+    ) %>%
+    bind_rows(
+        batters_faced_averages %>%
+        rename(
+            PLAYER_ID = pitcher,
+            PLAYING_TIME = playing_time
+        )
+    ) %>%
+    # we do need to make sure we end up with one number for all players
+    # so, we can group by player and sum all of their estimates
+    group_by(
+        PLAYER_ID
+    ) %>%
+    summarise(
+        PLAYING_TIME = sum(PLAYING_TIME)
+    ) %>%
+    ungroup()
+```
+
+
+
+```{r}
+combined_with_attributes <- combined_playing_time %>%
+    left_join(
+        lahman_people_data %>% 
+        select(player_mlb_id, birthYear, height, weight, bats, throws), 
+        by = c("PLAYER_ID" = "player_mlb_id")
+    )
+
+```
+
+```{r}
+
+model_data <- combined_with_attributes %>%
+    filter(!is.na(birthYear)) %>% # Ensure no missing values
+    mutate(age = 2024 - birthYear) %>% # Calculate age
+    select(-birthYear) # Drop unnecessary columns
+
+```
+
+```{r}
+model_data <- model_data %>%
+    mutate(
+        age_group = case_when(
+            age <= 25 ~ "young",
+            age > 25 & age <= 30 ~ "prime",
+            age > 30 ~ "veteran"
+        )
+    )
+
+```
+
+```{r}
+library(ggplot2)
+ggplot(model_data, aes(x = age_group, y = PLAYING_TIME, fill = age_group)) +
+    geom_boxplot() +
+    theme_minimal()
+
+```
+
+
+```{r}
+library(corrplot)
+corr_matrix <- cor(model_data %>% select(PLAYING_TIME, height, weight, age))
+corrplot(corr_matrix, method = "circle")
+
+```
+
+```{r}
+library(randomForest)
+rf_model <- randomForest(PLAYING_TIME ~ ., data = model_data, ntree = 500)
+varImpPlot(rf_model)
+
+```
+
+
