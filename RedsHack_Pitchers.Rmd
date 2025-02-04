@@ -1,0 +1,132 @@
+---
+title: "Pitchers_RedsHack"
+author: "Drew Duffy"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(utils)
+library(dplyr)
+library(ggplot2)
+```
+
+# Data Loading and Cleaning
+
+```{r}
+savantdata <- read.csv("C://Users/Drew Duffy/OneDrive/Documents/savant_data_2021_2023.csv")
+lahmandata <- read.csv("C://Users/Drew Duffy/OneDrive/Documents/lahman_people.csv")
+
+# Clean Savant Data
+clean_savant <- savantdata %>%
+  select(game_pk, pitch_type, game_date, release_speed, release_pos_x, release_pos_z,
+         batter, pitcher, events, description, zone, home_team, away_team, type,
+         hit_location, bb_type, game_year, pfx_x, pfx_z, outs_when_up, inning,
+         inning_topbot, hc_x, hc_y, fielder_2, vx0, vy0, vz0, launch_speed, launch_angle,
+         effective_speed, release_spin_rate, release_extension, pitcher_1, release_pos_y,
+         launch_speed_angle, pitch_number, pitch_name, spin_axis, role_key, sp_indicator, rp_indicator,
+         pitch_number_appearance, pitcher_at_bat_number, times_faced, delta_run_exp)
+
+clean_savant$game_date <- as.Date(clean_savant$game_date) # Convert game_date to Date type
+
+clean_savant_temp <- clean_savant %>%
+  arrange(pitcher, game_date) %>%
+  group_by(pitcher) %>%
+  mutate(days_since_last_appearance = as.numeric(difftime(game_date, lag(game_date), units = "days")))
+
+# Clean Lahman Data
+clean_lahman <- lahmandata %>%
+  select(player_mlb_id, playerID_LAHMAN, birthYear, weight, height, debut) %>%
+  filter(!is.na(player_mlb_id))
+
+# Create Pitcher Lookup
+pitchers <- as.data.frame(unique(clean_savant$pitcher)) %>%
+  rename(player_mlb_id ='unique(clean_savant$pitcher)')
+
+pitcher_id_height_weight <- left_join(pitchers, clean_lahman, by = "player_mlb_id") %>%
+  na.omit()
+
+```
+
+# Derived Variables and Summaries
+
+```{r}
+# Highest Used Fastball
+by_pitcher <- clean_savant %>%
+  group_by(pitcher) %>%
+  mutate(
+    ff_count = sum(pitch_type == "FF", na.rm = TRUE),
+    fc_count = sum(pitch_type == "FC", na.rm = TRUE),
+    si_count = sum(pitch_type == "SI", na.rm = TRUE),
+    highest_used_fb = case_when(
+      ff_count >= fc_count & ff_count >= si_count ~ "FF",
+      fc_count >= ff_count & fc_count >= si_count ~ "FC",
+      si_count >= ff_count & si_count >= fc_count ~ "SI",
+      TRUE ~ NA_character_
+    ),
+    ff_count = NULL,
+    fc_count = NULL,
+    si_count = NULL
+  ) %>%
+  group_by(pitcher) %>%
+  summarize(highest_used_fb = first(highest_used_fb),.groups = "drop")
+
+# Starting Pitcher Stats (with all calculations)
+sp_pitch_stats <- clean_savant %>%
+  inner_join(by_pitcher, by = "pitcher") %>%
+  filter(sp_indicator == 1, pitch_type == highest_used_fb) %>%
+  group_by(pitcher, highest_used_fb, game_date) %>%
+  summarize(
+    avg_release_speed = mean(release_speed, na.rm = TRUE),
+    sd_release_speed = sd(release_speed, na.rm = TRUE),
+    pitches_per_appearance = n(),
+    strikes_per_appearance = sum(type %in% c("S", "X"), na.rm = TRUE),
+    balls_per_appearance = sum(type == "B", na.rm = TRUE),
+    avg_delta_run_exp_appearance = mean(delta_run_exp, na.rm = TRUE),.groups = "drop"
+  ) %>%
+  mutate(
+    strike_ball_ratio = ifelse(
+      (strikes_per_appearance + balls_per_appearance) > 0,
+      strikes_per_appearance / (strikes_per_appearance + balls_per_appearance),
+      0
+    )
+  ) %>%
+  group_by(pitcher, highest_used_fb) %>%
+  summarize(
+    avg_release_speed = mean(avg_release_speed, na.rm = TRUE),
+    sd_release_speed = mean(sd_release_speed, na.rm = TRUE),
+    avg_pitches_per_appearance = mean(pitches_per_appearance, na.rm = TRUE),
+    sd_pitches_per_appearance = sd(pitches_per_appearance, na.rm = TRUE),
+    avg_strike_ball_ratio = mean(strike_ball_ratio, na.rm = TRUE),
+    sd_strike_ball_ratio = sd(strike_ball_ratio, na.rm = TRUE),
+    sd_strikes_per_appearance = sd(strikes_per_appearance, na.rm = TRUE),
+    n_appearances = n(),
+    total_pitches = sum(pitches_per_appearance, na.rm = TRUE),
+    avg_delta_run_exp = mean(avg_delta_run_exp_appearance, na.rm = TRUE),
+    sd_delta_run_exp = sd(avg_delta_run_exp_appearance, na.rm = TRUE),.groups = "drop"
+  )
+
+
+# Fastball Extension Summary
+fb_extension_summary <- clean_savant %>%
+  inner_join(sp_pitch_stats, by = "pitcher") %>%
+  filter(pitch_type == highest_used_fb) %>%
+  group_by(pitcher, highest_used_fb) %>%
+  summarize(
+    avg_extension = mean(release_extension, na.rm = TRUE),
+    sd_extension = sd(release_extension, na.rm = TRUE),
+    n = n(),.groups = "drop"
+  )
+
+# Final Join
+final_summary <- sp_pitch_stats %>%
+  inner_join(fb_extension_summary, by = c("pitcher", "highest_used_fb"))
+```
+
+# Final Summary
+```{r}
+final_summary
+```
+
