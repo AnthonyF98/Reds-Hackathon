@@ -247,10 +247,10 @@ calculate_player_batting_averages <- function(data) {
   streak_bins <- streak_stats %>%
     mutate(
       game_bin = case_when(
-        games_in_streak == 2 ~ "2 games",
-        games_in_streak == 4 ~ "4 games",
-        games_in_streak == 6 ~ "6 games",
-        games_in_streak == 8 ~ "8 games",
+        games_in_streak <= 2 ~ "2 games",
+        games_in_streak == 3:4 ~ "4 games",
+        games_in_streak == 5:6 ~ "6 games",
+        games_in_streak == 7:8 ~ "8 games",
         games_in_streak >= 10 ~ "10+ games",
         TRUE ~ NA_character_
       )
@@ -290,7 +290,42 @@ print(result)
 
 
 ```{r}
-length(unique(savant_pitch_by_pitch$batter))
+library(ggplot2)
+library(dplyr)
+
+graph_results <- function(player_averages) {
+  # Calculate the average batting average for each streak length
+  avg_ba <- player_averages %>%
+    summarize(
+      `2 Game BA` = mean(`2_Game_BA`, na.rm = TRUE),
+      `4 Game BA` = mean(`4_Game_BA`, na.rm = TRUE),
+      `6 Game BA` = mean(`6_Game_BA`, na.rm = TRUE),
+      `8 Game BA` = mean(`8_Game_BA`, na.rm = TRUE),
+      `10+ Game BA` = mean(`10+_Game_BA`, na.rm = TRUE)
+    ) %>%
+    pivot_longer(
+      cols = everything(),
+      names_to = "Streak_Length",
+      values_to = "Avg_Batting_Average"
+    )
+  
+  # Create the bar chart
+  ggplot(avg_ba, aes(x = Streak_Length, y = Avg_Batting_Average)) +
+    geom_text(aes(label = round(Avg_Batting_Average, 3)), vjust = -0.5, size = 4) +
+    geom_bar(stat = "identity", fill = "steelblue") +
+    labs(
+      title = "Average Batting Average by Streak Length",
+      x = "Streak Length",
+      y = "Average Batting Average"
+    ) +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+}
+
+# Assuming `result` contains the output from the calculate_player_batting_averages function
+graph_results(result)
+
+
 ```
 
 
