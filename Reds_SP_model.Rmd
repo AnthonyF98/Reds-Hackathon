@@ -1,0 +1,409 @@
+---
+title: "Starting Pitchers Reds"
+author: "Drew Duffy"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(utils)
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(xgboost)
+library(dplyr)
+library(caret)
+```
+
+# Data Loading and Cleaning
+
+```{r}
+savantdata <- read.csv("C://Users/Drew Duffy/OneDrive/Documents/savant_data_2021_2023.csv")
+lahmandata <- read.csv("C://Users/Drew Duffy/OneDrive/Documents/lahman_people.csv")
+
+# Clean Savant Data
+clean_savant <- savantdata %>%
+  select(game_pk, pitch_type, game_date, release_speed, release_pos_x, release_pos_z,
+         batter, pitcher, events, description, zone, home_team, away_team, type,
+         hit_location, bb_type, game_year, pfx_x, pfx_z, outs_when_up, inning, at_bat_number,
+         inning_topbot, hc_x, hc_y, fielder_2, vx0, vy0, vz0, launch_speed, launch_angle,
+         effective_speed, release_spin_rate, release_extension, pitcher_1, release_pos_y,
+         launch_speed_angle, pitch_number, pitch_name, spin_axis, role_key, sp_indicator, rp_indicator,
+         pitch_number_appearance, pitcher_at_bat_number, times_faced, delta_run_exp)
+
+clean_savant$game_date <- as.Date(clean_savant$game_date) # Convert game_date to Date type
+
+clean_savant_temp <- clean_savant %>%
+  arrange(pitcher, game_date) %>%
+  group_by(pitcher) %>%
+  mutate(days_since_last_appearance = as.numeric(difftime(game_date, lag(game_date), units = "days")))
+
+# Clean Lahman Data
+clean_lahman <- lahmandata %>%
+  select(player_mlb_id, playerID_LAHMAN, birthDate, birthYear, weight, height, debut) %>%
+  filter(!is.na(player_mlb_id))
+
+# Create Pitcher Lookup
+pitchers <- as.data.frame(unique(clean_savant$pitcher)) %>% 
+  mutate(player_mlb_id = unique(clean_savant$pitcher))
+
+
+
+
+
+pitcher_id_height_weight <- left_join(pitchers, clean_lahman, by = "player_mlb_id") %>%
+  na.omit()
+
+```
+
+# Derived Variables and Summaries For Starting Pitchers
+
+```{r}
+# Highest Used Fastball
+by_pitcher <- clean_savant %>%
+  group_by(pitcher) %>%
+  mutate(
+    ff_count = sum(pitch_type == "FF", na.rm = TRUE),
+    fc_count = sum(pitch_type == "FC", na.rm = TRUE),
+    si_count = sum(pitch_type == "SI", na.rm = TRUE),
+    highest_used_fb = case_when(
+      ff_count >= fc_count & ff_count >= si_count ~ "FF",
+      fc_count >= ff_count & fc_count >= si_count ~ "FC",
+      si_count >= ff_count & si_count >= fc_count ~ "SI",
+      TRUE ~ NA_character_
+    ),
+    ff_count = NULL,
+    fc_count = NULL,
+    si_count = NULL
+  ) %>%
+  group_by(pitcher) %>%
+  summarise(highest_used_fb = first(highest_used_fb),.groups = "drop")
+
+# Starting Pitcher Stats (with all calculations)
+sp_pitch_stats <- clean_savant %>%
+  # Recode bb_type: combine line_drive, fly_ball, and popup into Flyball
+  mutate(bb_type_grouped = case_when(
+    bb_type %in% c("line_drive", "fly_ball", "popup") ~ "Flyball",
+    bb_type == "ground_ball" ~ "Groundball",
+    TRUE ~ NA_character_  # Handle missing or other types
+  )) %>%
+  inner_join(by_pitcher, by = "pitcher") %>%
+  filter(sp_indicator == 1, pitch_type == highest_used_fb) %>%
+  group_by(pitcher, highest_used_fb, game_date) %>%
+  summarise(
+    avg_release_speed = mean(release_speed, na.rm = TRUE),
+    sd_release_speed = sd(release_speed, na.rm = TRUE),
+    pitches_per_appearance = n(),
+    strikes_per_appearance = sum(type %in% c("S", "X"), na.rm = TRUE),
+    balls_per_appearance = sum(type == "B", na.rm = TRUE),
+    avg_delta_run_exp_appearance = mean(delta_run_exp, na.rm = TRUE),
+    ground_balls = sum(bb_type_grouped == "Groundball", na.rm = TRUE),
+    fly_balls = sum(bb_type_grouped == "Flyball", na.rm = TRUE),
+    swinging_strikes = sum(description == "swinging_strike", na.rm = TRUE),  # Count swinging strikes
+    .groups = "drop"
+  ) %>%
+  mutate(
+    strike_ball_ratio = ifelse(
+      (strikes_per_appearance + balls_per_appearance) > 0,
+      strikes_per_appearance / (strikes_per_appearance + balls_per_appearance),
+      0
+    ),
+    # Ground Ball to Flyball Ratio
+    gb_fb_ratio = ifelse(fly_balls > 0, ground_balls / fly_balls, NA),
+    # Calculate whiff_rate (swinging strikes / total pitches)
+    whiff_rate = ifelse(pitches_per_appearance > 0, swinging_strikes / pitches_per_appearance, 0)
+  ) %>%
+  group_by(pitcher, highest_used_fb) %>%
+  summarise(
+    avg_release_speed = mean(avg_release_speed, na.rm = TRUE),
+    sd_release_speed = mean(sd_release_speed, na.rm = TRUE),
+    avg_pitches_per_appearance = mean(pitches_per_appearance, na.rm = TRUE),
+    sd_pitches_per_appearance = sd(pitches_per_appearance, na.rm = TRUE),
+    avg_strike_ball_ratio = mean(strike_ball_ratio, na.rm = TRUE),
+    sd_strike_ball_ratio = sd(strike_ball_ratio, na.rm = TRUE),
+    sd_strikes_per_appearance = sd(strikes_per_appearance, na.rm = TRUE),
+    n_appearances = n(),
+    total_pitches = sum(pitches_per_appearance, na.rm = TRUE),
+    avg_delta_run_exp = mean(avg_delta_run_exp_appearance, na.rm = TRUE),
+    sd_delta_run_exp = sd(avg_delta_run_exp_appearance, na.rm = TRUE),
+    # Average and Standard Deviation for GB/FB Ratio
+    avg_gb_fb_ratio = mean(gb_fb_ratio, na.rm = TRUE),
+    sd_gb_fb_ratio = sd(gb_fb_ratio, na.rm = TRUE),
+    # Average and Standard Deviation for Whiff Rate
+    avg_whiff_rate = mean(whiff_rate, na.rm = TRUE),
+    sd_whiff_rate = sd(whiff_rate, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+
+
+
+# Fastball Extension Summary
+sp_fb_extension_summary <- clean_savant %>%
+  inner_join(sp_pitch_stats, by = "pitcher") %>%
+  filter(pitch_type == highest_used_fb) %>%
+  group_by(pitcher, highest_used_fb) %>%
+  summarise(
+    avg_extension = mean(release_extension, na.rm = TRUE),
+    sd_extension = sd(release_extension, na.rm = TRUE),
+    n = n(),.groups = "drop"
+  )
+
+sp_final_summary <- sp_pitch_stats %>%
+  inner_join(sp_fb_extension_summary, by = c("pitcher", "highest_used_fb"))
+
+# calculating total batters faced
+total_batters_faced <- clean_savant %>%
+  group_by(pitcher, game_pk) %>%
+  summarise(batters_faced = n_distinct(at_bat_number), .groups = "drop") %>% 
+  group_by(pitcher) %>%
+  summarise(total_batters_faced = sum(batters_faced), .groups = "drop")
+
+sp_summary <- left_join(sp_final_summary, total_batters_faced, by = "pitcher")
+
+
+# merging pitcher summary with height and weight
+summary_with_hw <- merge(
+  sp_summary, 
+  pitcher_id_height_weight, 
+  by.x = "pitcher", 
+  by.y = "player_mlb_id", 
+  all.x = TRUE
+) %>% 
+  na.omit()
+
+# calculating age from 2025
+age <- summary_with_hw %>%
+  mutate(
+    Age = (2025 - birthYear),
+    debut = as.Date(debut),
+    birthDate = as.Date(birthDate),
+    debut_age = round(as.numeric((debut - birthDate) / 365.25), 1)
+  ) %>% 
+  select(-playerID_LAHMAN)
+
+# 90th %tile breaks
+
+breaks <- clean_savant %>% 
+  mutate(h_break = pfx_x * 12, 
+         v_break = pfx_z * 12) %>% 
+  group_by(pitcher) %>% 
+  summarise(h_break90 = quantile(h_break, 0.9, na.rm = TRUE),
+         v_break90 = quantile(v_break, 0.9, na.rm = TRUE),
+         h_break10 = quantile(h_break, 0.1, na.rm = TRUE), 
+         v_break10 = quantile(v_break, 0.1, na.rm = TRUE)) %>% 
+  mutate(distance_h = h_break90 - h_break10, 
+         distance_v = v_break90 - v_break10)
+
+
+sp_final_summary1 <- merge(
+  age,            # Your age dataframe
+  breaks,         # Your breaks dataframe
+  by = "pitcher", # The common column to join on
+  all.x = TRUE     # Left join to retain all pitchers in the 'age' dataframe
+)
+
+
+temp <- sp_final_summary1 %>% 
+  mutate(height_m = height * 0.0254, 
+    weight_kg = weight * 0.453592, 
+    bmi = weight_kg / (height_m^2))
+
+```
+
+```{r}
+
+features1 <- temp %>%
+  select(-pitcher, -highest_used_fb, -total_batters_faced , -n_appearances, -n, -total_pitches, -`unique(clean_savant$pitcher)`) %>% 
+  na.omit()
+
+target <- temp$total_batters_faced
+
+# Convert to matrix for XGBoost
+features_matrix <- as.matrix(features1)
+
+set.seed(27)
+train_idx <- createDataPartition(target, p = 0.8, list = FALSE)
+X_train <- features_matrix[train_idx, ] <- as.numeric(X_train)
+y_train <- target[train_idx] <- as.numeric(y_train)
+X_test  <- features_matrix[-train_idx, ] <- as.numeric(X_test)
+y_test  <- target[-train_idx] <- as.numeric(y_train)
+
+
+# XGBoost DMatrix (optional but efficient)
+dtrain <- xgb.DMatrix(data = X_train, label = y_train)
+dtest  <- xgb.DMatrix(data = X_test, label = y_test)
+
+# Model Parameters
+params <- list(
+  objective = "reg:squarederror",  # Regression task
+  eval_metric = "rmse",            # Root Mean Squared Error
+  eta = 0.1,                       # Learning rate
+  max_depth = 4                    # Tree depth
+)
+
+# Train the model
+xgb_model <- xgb.train(
+  params = params,
+  data = dtrain,
+  nrounds = 100,
+  watchlist = list(train = dtrain, eval = dtest),
+  early_stopping_rounds = 10,
+  verbose = 0
+)
+
+# Predictions
+preds <- predict(xgb_model, newdata = dtest)
+
+# Evaluation Metrics
+rmse <- sqrt(mean((preds - y_test)^2))
+mae  <- mean(abs(preds - y_test))
+
+cat("RMSE:", rmse, "\n")
+cat("MAE:", mae, "\n")
+
+
+# Plot Feature Importance
+importance_matrix <- xgb.importance(feature_names = colnames(X_train), model = xgb_model)
+xgb.plot.importance(importance_matrix)
+
+```
+
+
+
+
+
+
+
+
+# Reliever Stats
+```{r}
+rp_pitch_stats <- clean_savant %>%
+  # Recode bb_type: combine line_drive, fly_ball, and popup into Flyball
+  mutate(bb_type_grouped = case_when(
+    bb_type %in% c("line_drive", "fly_ball", "popup") ~ "Flyball",
+    bb_type == "ground_ball" ~ "Groundball",
+    TRUE ~ NA_character_  # Handle missing or other types
+  )) %>%
+  inner_join(by_pitcher, by = "pitcher") %>%
+  filter(rp_indicator == 1, pitch_type == highest_used_fb) %>%
+  group_by(pitcher, highest_used_fb, game_date) %>%
+  summarize(
+    avg_release_speed = mean(release_speed, na.rm = TRUE),
+    sd_release_speed = sd(release_speed, na.rm = TRUE),
+    pitches_per_appearance = n(),
+    strikes_per_appearance = sum(type %in% c("S", "X"), na.rm = TRUE),
+    balls_per_appearance = sum(type == "B", na.rm = TRUE),
+    avg_delta_run_exp_appearance = mean(delta_run_exp, na.rm = TRUE),
+    ground_balls = sum(bb_type_grouped == "Groundball", na.rm = TRUE),
+    fly_balls = sum(bb_type_grouped == "Flyball", na.rm = TRUE),
+    swinging_strikes = sum(description == "swinging_strike", na.rm = TRUE),  # Count swinging strikes
+    .groups = "drop"
+  ) %>%
+  mutate(
+    strike_ball_ratio = ifelse(
+      (strikes_per_appearance + balls_per_appearance) > 0,
+      strikes_per_appearance / (strikes_per_appearance + balls_per_appearance),
+      0
+    ),
+    # Ground Ball to Flyball Ratio
+    gb_fb_ratio = ifelse(fly_balls > 0, ground_balls / fly_balls, NA),
+    # Calculate whiff_rate (swinging strikes / total pitches)
+    whiff_rate = ifelse(pitches_per_appearance > 0, swinging_strikes / pitches_per_appearance, 0)
+  ) %>%
+  group_by(pitcher, highest_used_fb) %>%
+  summarize(
+    avg_release_speed = mean(avg_release_speed, na.rm = TRUE),
+    sd_release_speed = mean(sd_release_speed, na.rm = TRUE),
+    avg_pitches_per_appearance = mean(pitches_per_appearance, na.rm = TRUE),
+    sd_pitches_per_appearance = sd(pitches_per_appearance, na.rm = TRUE),
+    avg_strike_ball_ratio = mean(strike_ball_ratio, na.rm = TRUE),
+    sd_strike_ball_ratio = sd(strike_ball_ratio, na.rm = TRUE),
+    sd_strikes_per_appearance = sd(strikes_per_appearance, na.rm = TRUE),
+    n_appearances = n(),
+    total_pitches = sum(pitches_per_appearance, na.rm = TRUE),
+    avg_delta_run_exp = mean(avg_delta_run_exp_appearance, na.rm = TRUE),
+    sd_delta_run_exp = sd(avg_delta_run_exp_appearance, na.rm = TRUE),
+    # Average and Standard Deviation for GB/FB Ratio
+    avg_gb_fb_ratio = mean(gb_fb_ratio, na.rm = TRUE),
+    sd_gb_fb_ratio = sd(gb_fb_ratio, na.rm = TRUE),
+    # Average and Standard Deviation for Whiff Rate
+    avg_whiff_rate = mean(whiff_rate, na.rm = TRUE),
+    sd_whiff_rate = sd(whiff_rate, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+
+
+
+# Fastball Extension Summary
+rp_fb_extension_summary <- clean_savant %>%
+  inner_join(rp_pitch_stats, by = "pitcher") %>%
+  filter(pitch_type == highest_used_fb) %>%
+  group_by(pitcher, highest_used_fb) %>%
+  summarize(
+    avg_extension = mean(release_extension, na.rm = TRUE),
+    sd_extension = sd(release_extension, na.rm = TRUE),
+    n = n(),.groups = "drop"
+  )
+
+rp_final_summary <- rp_pitch_stats %>%
+  inner_join(rp_fb_extension_summary, by = c("pitcher", "highest_used_fb"))
+
+# calculating total batters faced
+total_batters_faced <- clean_savant %>%
+  group_by(pitcher, game_pk) %>%
+  summarize(batters_faced = n_distinct(at_bat_number), .groups = "drop") %>% 
+  group_by(pitcher) %>%
+  summarize(total_batters_faced = sum(batters_faced), .groups = "drop")
+
+rp_summary <- left_join(rp_final_summary, total_batters_faced, by = "pitcher")
+
+
+# merging pitcher summary with height and weight
+rp_summary_with_hw <- merge(
+  rp_summary, 
+  pitcher_id_height_weight, 
+  by.x = "pitcher", 
+  by.y = "player_mlb_id", 
+  all.x = TRUE
+) %>% 
+  na.omit()
+
+# calculating age from 2025
+age_rp <- rp_summary_with_hw %>% 
+  mutate(Age = (2025 - birthYear)) %>% 
+  select(-debut, -playerID_LAHMAN)
+
+# 90th %tile breaks
+
+breaks_rp <- clean_savant %>% 
+  mutate(h_break = pfx_x * 12, 
+         v_break = pfx_z * 12) %>% 
+  group_by(pitcher) %>% 
+  summarize(h_break90 = quantile(h_break, 0.9, na.rm = TRUE),
+         v_break90 = quantile(v_break, 0.9, na.rm = TRUE),
+         h_break10 = quantile(h_break, 0.1, na.rm = TRUE), 
+         v_break10 = quantile(v_break, 0.1, na.rm = TRUE)) %>% 
+  mutate(distance_h = h_break90 - h_break10, 
+         distance_v = v_break90 - v_break10)
+
+
+rp_final_summary1 <- merge(
+  age_rp,            # Your age dataframe
+  breaks_rp,         # Your breaks dataframe
+  by = "pitcher", # The common column to join on
+  all.x = TRUE     # Left join to retain all pitchers in the 'age' dataframe
+)
+
+```
+
+
+# Final Summaries 
+```{r}
+sp_final_summary
+rp_final_summary
+```
+
