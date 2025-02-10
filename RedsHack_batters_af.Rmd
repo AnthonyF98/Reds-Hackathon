@@ -299,20 +299,19 @@ colnames(hitter_data_clean)
 ```{r}
 library(dplyr)
 
-# Aggregate data for each batter in 2023
 hitter_data_2024 <- hitter_data_clean %>%
-  filter(season == 2023) %>%  # Use most recent season
-  group_by(batter) %>%  # Group by batter
+  filter(season == 2023) %>%
+  group_by(batter) %>%
   summarise(
     avg_launch_speed = mean(launch_speed, na.rm = TRUE),
     avg_launch_angle = mean(launch_angle, na.rm = TRUE),
     avg_hit_distance = mean(hit_distance_sc, na.rm = TRUE),
-    total_games = n_distinct(game_pk),  # Count number of games played
-    total_PA = sum(PA, na.rm = TRUE)  # Total plate appearances (Target variable)
+    total_games = n_distinct(game_pk),
+    total_PA = sum(PA, na.rm = TRUE)
   ) %>%
-  mutate(season = 2024,  # Set season to 2024 for predictions
-         PA_last_year = total_PA) %>%  # Save 2023 PA as last year’s PA
-  select(-total_PA)  # Remove total_PA because we are predicting it
+  mutate(season = 2024,  
+         PA_last_year = total_PA) %>%  
+  select(-total_PA)  # Remove total_PA since we are predicting it
 
 ```
 
@@ -324,19 +323,14 @@ hitter_data_2024 <- hitter_data_2024 %>% drop_na()
 ```
 
 
-```{r}
-sapply(train_data, class)
-
-```
 
 
 ```{r}
-# Train data: Use only 2021-2023
 train_data <- hitter_data_clean %>%
   filter(season < 2024) %>%
   group_by(batter, season) %>%
   summarise(
-    total_PA = sum(PA, na.rm = TRUE),
+    total_PA = sum(PA, na.rm = TRUE),  # Ensure it’s total PA
     avg_launch_speed = mean(launch_speed, na.rm = TRUE),
     avg_launch_angle = mean(launch_angle, na.rm = TRUE),
     avg_hit_distance = mean(hit_distance_sc, na.rm = TRUE),
@@ -345,7 +339,9 @@ train_data <- hitter_data_clean %>%
   arrange(batter, season) %>%
   group_by(batter) %>%
   mutate(PA_last_year = lag(total_PA, 1)) %>%
-  filter(season != 2021)  # Remove first year due to missing lag
+  filter(season != 2021) %>%  # Remove first year due to missing lag
+  ungroup()
+
 
 # Ensure train_data is a proper dataframe before converting to matrix
 train_data <- train_data %>%
@@ -367,17 +363,33 @@ X_test <- test_data %>%
 
 y_train <- train_data$total_PA
 ```
+```{r}
+
+sapply(train_data, class)
+
+```
 
 
 ```{r}
 train_features <- colnames(train_data %>% select(-batter))
 test_features  <- colnames(test_data)
 
-# Print differences
-print(setdiff(train_features, test_features))  # Columns in train but not in test
-print(setdiff(test_features, train_features))  # Columns in test but not in train
+print(setdiff(train_features, test_features))  # Features in train but not test
+print(setdiff(test_features, train_features))  # Features in test but not train
+
+missing_cols <- setdiff(train_features, test_features)
+for (col in missing_cols) {
+  test_data[[col]] <- NA  # Add missing columns with NA
+}
+
+extra_cols <- setdiff(test_features, train_features)
+test_data <- test_data %>% select(-all_of(extra_cols))
+
+# Ensure correct column order
+test_data <- test_data %>% select(all_of(train_features))
 
 ```
+
 ```{r}
 missing_cols <- setdiff(train_features, test_features)
 
@@ -387,7 +399,7 @@ for (col in missing_cols) {
 
 extra_cols <- setdiff(test_features, train_features)
 
-test_data <- test_data %>% select(-all_of(extra_cols))
+#test_data <- test_data %>% select(-all_of(extra_cols))
 
 test_data <- test_data %>%
   select(all_of(train_features))  # Reorder test_data to match train_data
@@ -403,25 +415,35 @@ test_data <- test_data %>%
 
 
 ```{r}
-X_train <- train_data %>%
-  select(-batter) %>%
-  as.matrix()
+X_train <- train_data %>% select(-batter) %>% as.matrix()
+y_train <- train_data$total_PA  # Ensure it's total PA
 
-X_test <- test_data %>%
-  as.matrix()
+X_test <- test_data %>% as.matrix()
 
 # Convert to DMatrix
-dtrain <- xgb.DMatrix(data = X_train, label = train_data$total_PA)
+dtrain <- xgb.DMatrix(data = X_train, label = y_train)
 dtest  <- xgb.DMatrix(data = X_test)
+
+# Train Model
+xgb_model <- xgb.train(
+  params = list(
+    objective = "reg:squarederror",
+    eval_metric = "rmse",
+    eta = 0.1,
+    max_depth = 4
+  ),
+  data = dtrain,
+  nrounds = 100,
+  watchlist = list(train = dtrain),
+  early_stopping_rounds = 10,
+  verbose = 1
+)
 
 # Predict
 predictions_2024 <- predict(xgb_model, newdata = dtest)
 
 # Add predictions to test data
 test_data$predicted_PA <- predictions_2024
-
-head(test_data)
-
 
 ```
 
@@ -438,9 +460,27 @@ test_results %>%
   head()
 
 ```
+
 ```{r}
 test_results <- test_results %>%
   mutate(predicted_total_PA = predicted_PA * total_games)
+
+```
+
+```{r}
+#write.csv(test_results, "predicitions_int.csv")
+```
+
+```{r}
+# Filter batters whose predicted total PA is greater than their PA from last year
+batters_with_increased_PA <- test_results %>%
+  filter(predicted_total_PA > PA_last_year)
+
+# Display the filtered results
+print(batters_with_increased_PA)
+
+# Optionally, save the results to a CSV file
+# write.csv(batters_with_increased_PA, "batters_with_increased_PA.csv", row.names = FALSE)
 
 ```
 
