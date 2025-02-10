@@ -1,0 +1,446 @@
+---
+title: "RedsHack_Batters"
+author: "anthony fernandez/paul trusela"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+# install.packages("lubridate")
+library(dplyr)
+library(ggplot2)
+library(caret)
+library(tidyr)
+library(lubridate)
+
+
+#lahman_people_data <- read.csv('Desktop/Reds Hackathon/lahman_people.csv')
+#savant_pitch_by_pitch <- read.csv('Desktop/Reds Hackathon/savant_data_2021_2023.csv')
+#sample_submission <- read.csv('Desktop/Reds Hackathon/sample_submission.csv')
+
+# Saving to .rds
+#saveRDS(read.csv('Desktop/Reds Hackathon/sample_submission.csv'), "sample_submission.rds")
+#saveRDS(read.csv('Desktop/Reds Hackathon/savant_data_2021_2023.csv'), "savant_pitch_by_pitch.rds")
+#saveRDS(read.csv('Desktop/Reds Hackathon/lahman_people.csv'), "lahman_people.rds")
+
+# Loading .rds
+sample_submission <- readRDS("sample_submission.rds")
+savant_pitch_by_pitch <- readRDS("savant_pitch_by_pitch.rds")
+lahman_people <- readRDS("lahman_people.rds")
+```
+
+
+```{r}
+# Subset the dataset to include only the selected columns
+hitter_data <- savant_pitch_by_pitch %>%
+  select(`game_date`,`batter`, `pitcher`,`hit_distance_sc`, `launch_speed_angle`, `launch_angle`, `estimated_ba_using_speedangle`, 
+         `estimated_woba_using_speedangle`, `at_bat_number`, `pitch_name`, `game_pk`, `launch_speed`, 
+         `inning`, `bb_type`, `description`, `events`, `woba_value`, `woba_denom`, `babip_value`, 
+         `iso_value`, `fielder_3`, `fielder_4`, `fielder_5`, `fielder_6`, `fielder_7`, `fielder_8`, `fielder_9`,
+         `fielder_2_1`, `pitch_number`)
+
+# Check the structure of the cleaned data
+head(hitter_data)
+
+# Extract year from game_date to use as season
+hitter_data$season <- year(hitter_data$game_date)
+
+```
+
+```{r}
+# Ensure `season` is treated correctly (might already be in correct format based on your list)
+hitter_data$season <- as.integer(hitter_data$season)
+
+# Adjusting the Plate Appearance (PA) calculation
+# We count it as a plate appearance if 'events' is not NA and not an empty string
+hitter_data$PA <- ifelse(!is.na(hitter_data$events) & hitter_data$events != "", 1, 0)
+
+# Now, 'PA' is binary: 1 if there's a recorded event that's not empty, 0 otherwise.
+
+```
+
+```{r}
+# Save hitter_data as a CSV file
+# write.csv(hitter_data, '/Users/pauly/OneDrive/Documents/GitHub/Reds-Hackathon/hitter_data.csv', row.names = FALSE)
+
+```
+
+```{r}
+# Calculate total PAs per batter per season
+seasonal_pa_stats <- hitter_data %>%
+  group_by(batter, season) %>%
+  summarise(Total_PAs = sum(PA), .groups = 'drop')
+
+# Pivot the data to create separate columns for each season and calculate the total PAs across all seasons
+batter_pa_wide <- seasonal_pa_stats %>%
+  pivot_wider(names_from = season, values_from = Total_PAs, names_prefix = "PA_") %>%
+  mutate(Total_PA = rowSums(across(starts_with("PA_")), na.rm = TRUE))  # Calculate total PAs
+
+# View the restructured data
+print(batter_pa_wide)
+
+```
+
+```{r}
+# Calculate total PAs per batter per season
+seasonal_pa_stats <- hitter_data %>%
+  group_by(batter, season) %>%
+  summarise(Total_PAs = sum(PA), .groups = 'drop')
+
+# Pivot the data to create separate columns for each season and calculate the total PAs across all seasons
+batter_pa_wide <- seasonal_pa_stats %>%
+  pivot_wider(names_from = season, values_from = Total_PAs, names_prefix = "PA_") %>%
+  mutate(Total_PA = rowSums(across(starts_with("PA_")), na.rm = TRUE))  # Calculate total PAs
+
+# Reorder columns to have PA_2021 first, then PA_2022, PA_2023, and Total_PA
+batter_pa_wide <- batter_pa_wide %>%
+  select(batter, PA_2021, PA_2022, PA_2023, Total_PA)
+
+# View the restructured data
+print(batter_pa_wide)
+
+```
+
+```{r}
+# Find IDs that are both pitchers and batters
+two_way_players <- intersect(hitter_data$pitcher, hitter_data$batter)
+
+# Display the list of IDs
+print(two_way_players)
+
+```
+
+```{r}
+# Filter for two-way players
+two_way_pa_data <- hitter_data %>%
+  filter(batter %in% two_way_players)
+
+# Calculate plate appearances per player per season
+seasonal_pa_stats <- two_way_pa_data %>%
+  mutate(season = substr(game_date, 1, 4)) %>%  # Extract year from game_date
+  group_by(batter, season) %>%
+  summarise(Total_PAs = n_distinct(at_bat_number), .groups = 'drop')
+
+# View the seasonal plate appearance stats
+print(seasonal_pa_stats)
+```
+
+```{r}
+# Pivot the data to create separate columns for each season and calculate the total PAs across all seasons
+twoway_pa_wide <- seasonal_pa_stats %>%
+  filter(season != 2021)%>%
+  pivot_wider(names_from = season, values_from = Total_PAs, names_prefix = "PA_") %>%
+  mutate(Total_PA = rowSums(across(starts_with("PA_")), na.rm = TRUE))  # Calculate total PAs
+
+# View the restructured data
+print(twoway_pa_wide)
+
+```
+
+```{r}
+library(dplyr)
+
+# Merge birthDate from lahman_people to batter_pa_wide based on player IDs
+two_way_pa_with_birthdate <- twoway_pa_wide %>%
+  left_join(lahman_people %>% select(player_mlb_id, birthDate, debut), 
+            by = c("batter" = "player_mlb_id"))
+
+# View the updated dataframe
+print(two_way_pa_with_birthdate)
+
+```
+
+
+```{r}
+# Group by pitcher and season to calculate innings pitched and total pitches thrown
+pitching_stats <- hitter_data %>%
+  group_by(pitcher, season, game_pk, inning) %>%  
+  summarise(Innings_Pitched = 1, .groups = 'drop') %>%  # Count unique innings pitched
+  right_join(hitter_data %>%
+               group_by(pitcher, season) %>%
+               summarise(Total_Pitches_Thrown = sum(pitch_number), .groups = 'drop'), 
+             by = c("pitcher", "season")) %>%
+  group_by(pitcher, season) %>%
+  summarise(Total_Innings_Pitched = sum(Innings_Pitched, na.rm = TRUE),
+            Total_Pitches_Thrown = max(Total_Pitches_Thrown, na.rm = TRUE),  # Ensure no duplication of sum
+            .groups = 'drop')
+
+# View the combined pitching stats
+print(pitching_stats)
+
+```
+
+```{r}
+# Pivot to separate innings pitched and pitches thrown for each season
+pitching_stats_wide <- pitching_stats %>%
+  pivot_wider(names_from = season, 
+              values_from = c(Total_Innings_Pitched, Total_Pitches_Thrown),
+              names_glue = "{.value}_{season}") %>%
+  mutate(Total_IP = rowSums(across(starts_with("Total_Innings_Pitched_")), na.rm = TRUE),
+         Total_Pitches = rowSums(across(starts_with("Total_Pitches_Thrown_")), na.rm = TRUE))
+
+# View the pivoted stats
+print(pitching_stats_wide)
+
+```
+
+```{r}
+# Merge with the two-way player data
+two_way_player_full_data <- two_way_pa_with_birthdate %>%
+  left_join(pitching_stats_wide, by = c("batter" = "pitcher"))
+
+# View the final dataframe
+print(two_way_player_full_data)
+
+```
+
+```{r}
+twoway_exclusions <- two_way_player_full_data %>%
+  filter(Total_Pitches > 500)
+
+library(dplyr)
+
+# Remove batters present in twoway_exclusions from hitter_data
+hitter_data <- hitter_data %>%
+  anti_join(twoway_exclusions, by = "batter")
+
+# Check the first few rows to verify
+head(hitter_data)
+
+```
+
+```{r}
+#write.csv(hitter_data,"hitter_data.csv")
+#write.csv(seasonal_pa_stats, "seasonal_pa_stats.csv")
+#write.csv(batter_pa_wide, "batter_pa_wide.csv")
+
+summary(hitter_data)
+```
+
+```{r}
+library(tidyverse)
+library(caret)
+library(xgboost)
+# Ensure target variable is numeric and remove NA values
+target <- hitter_data$PA
+
+# Remove rows where target is NA
+hitter_data_clean <- hitter_data %>% filter(!is.na(PA))
+
+# Select numeric features and drop categorical columns
+features <- hitter_data_clean %>%
+  select(-game_date, -batter, -pitcher, -pitch_name, -starts_with("fielder_")) %>%
+  select_if(is.numeric)
+
+# Convert to matrix
+features_matrix <- as.matrix(features)
+
+# Updated target variable after filtering
+target <- hitter_data_clean$PA
+
+# Train-Test Split
+set.seed(27)
+train_idx <- createDataPartition(target, p = 0.8, list = FALSE)
+
+X_train <- features_matrix[train_idx, ]
+y_train <- target[train_idx]
+X_test  <- features_matrix[-train_idx, ]
+y_test  <- target[-train_idx]
+
+
+# Ensure data is numeric
+X_train <- apply(X_train, 2, as.numeric)
+X_test  <- apply(X_test, 2, as.numeric)
+y_train <- as.numeric(y_train)
+y_test  <- as.numeric(y_test)
+
+# Convert to XGBoost DMatrix
+dtrain <- xgb.DMatrix(data = X_train, label = y_train)
+dtest  <- xgb.DMatrix(data = X_test, label = y_test)
+
+# XGBoost Parameters
+params <- list(
+  objective = "reg:squarederror",  
+  eval_metric = "rmse",            
+  eta = 0.1,                       
+  max_depth = 4                    
+)
+
+# Train Model
+xgb_model <- xgb.train(
+  params = params,
+  data = dtrain,
+  nrounds = 100,
+  watchlist = list(train = dtrain, eval = dtest),
+  early_stopping_rounds = 10,
+  verbose = 1
+)
+
+# Predictions
+preds <- predict(xgb_model, newdata = dtest)
+
+# Evaluate Model
+rmse <- sqrt(mean((preds - y_test)^2))
+mae  <- mean(abs(preds - y_test))
+
+cat("RMSE:", rmse, "\n")
+cat("MAE:", mae, "\n")
+
+# Feature Importance
+importance_matrix <- xgb.importance(feature_names = colnames(features), model = xgb_model)
+xgb.plot.importance(importance_matrix)
+
+
+```
+```{r}
+colnames(hitter_data_clean)
+
+```
+```{r}
+library(dplyr)
+
+# Aggregate data for each batter in 2023
+hitter_data_2024 <- hitter_data_clean %>%
+  filter(season == 2023) %>%  # Use most recent season
+  group_by(batter) %>%  # Group by batter
+  summarise(
+    avg_launch_speed = mean(launch_speed, na.rm = TRUE),
+    avg_launch_angle = mean(launch_angle, na.rm = TRUE),
+    avg_hit_distance = mean(hit_distance_sc, na.rm = TRUE),
+    total_games = n_distinct(game_pk),  # Count number of games played
+    total_PA = sum(PA, na.rm = TRUE)  # Total plate appearances (Target variable)
+  ) %>%
+  mutate(season = 2024,  # Set season to 2024 for predictions
+         PA_last_year = total_PA) %>%  # Save 2023 PA as last year’s PA
+  select(-total_PA)  # Remove total_PA because we are predicting it
+
+```
+
+```{r}
+summary(hitter_data_2024)
+```
+```{r}
+hitter_data_2024 <- hitter_data_2024 %>% drop_na()
+```
+
+
+```{r}
+sapply(train_data, class)
+
+```
+
+
+```{r}
+# Train data: Use only 2021-2023
+train_data <- hitter_data_clean %>%
+  filter(season < 2024) %>%
+  group_by(batter, season) %>%
+  summarise(
+    total_PA = sum(PA, na.rm = TRUE),
+    avg_launch_speed = mean(launch_speed, na.rm = TRUE),
+    avg_launch_angle = mean(launch_angle, na.rm = TRUE),
+    avg_hit_distance = mean(hit_distance_sc, na.rm = TRUE),
+    total_games = n_distinct(game_pk)
+  ) %>%
+  arrange(batter, season) %>%
+  group_by(batter) %>%
+  mutate(PA_last_year = lag(total_PA, 1)) %>%
+  filter(season != 2021)  # Remove first year due to missing lag
+
+# Ensure train_data is a proper dataframe before converting to matrix
+train_data <- train_data %>%
+  ungroup() %>%  # Remove any grouping structure
+  as.data.frame()  # Ensure it's a dataframe
+
+
+# Test data: Use hitter_data_2024 (after NA fixes)
+test_data <- hitter_data_2024 
+
+# Convert to numeric matrix
+X_train <- train_data %>%
+  select(-batter) %>%
+  as.matrix()
+
+X_test <- test_data %>%
+  select(-batter) %>%
+  as.matrix()
+
+y_train <- train_data$total_PA
+```
+
+
+```{r}
+train_features <- colnames(train_data %>% select(-batter))
+test_features  <- colnames(test_data)
+
+# Print differences
+print(setdiff(train_features, test_features))  # Columns in train but not in test
+print(setdiff(test_features, train_features))  # Columns in test but not in train
+
+```
+```{r}
+missing_cols <- setdiff(train_features, test_features)
+
+for (col in missing_cols) {
+  test_data[[col]] <- NA  # Add missing columns with NA
+}
+
+extra_cols <- setdiff(test_features, train_features)
+
+test_data <- test_data %>% select(-all_of(extra_cols))
+
+test_data <- test_data %>%
+  select(all_of(train_features))  # Reorder test_data to match train_data
+
+```
+
+```{r}
+test_data <- test_data %>%
+  select(all_of(colnames(train_data %>% select(-batter))))
+
+```
+
+
+
+```{r}
+X_train <- train_data %>%
+  select(-batter) %>%
+  as.matrix()
+
+X_test <- test_data %>%
+  as.matrix()
+
+# Convert to DMatrix
+dtrain <- xgb.DMatrix(data = X_train, label = train_data$total_PA)
+dtest  <- xgb.DMatrix(data = X_test)
+
+# Predict
+predictions_2024 <- predict(xgb_model, newdata = dtest)
+
+# Add predictions to test data
+test_data$predicted_PA <- predictions_2024
+
+head(test_data)
+
+
+```
+
+
+```{r}
+# Ensure batter column is added back to the test_data with predictions
+test_results <- hitter_data_2024 %>%
+  select(batter) %>%  # Select only the batter column
+  bind_cols(test_data)  # Add back to test_data
+
+# View batter and predicted PAs
+test_results %>%
+  select(batter, predicted_PA) %>%
+  head()
+
+```
+```{r}
+test_results <- test_results %>%
+  mutate(predicted_total_PA = predicted_PA * total_games)
+
+```
+
