@@ -306,6 +306,8 @@ hitter_data_2024 <- hitter_data_clean %>%
     avg_launch_speed = mean(launch_speed, na.rm = TRUE),
     avg_launch_angle = mean(launch_angle, na.rm = TRUE),
     avg_hit_distance = mean(hit_distance_sc, na.rm = TRUE),
+    avg_woba_value = mean(woba_value, na.rm = TRUE),
+avg_pitch_number = mean(pitch_number, na.rm = TRUE),
     total_games = n_distinct(game_pk),
     total_PA = sum(PA, na.rm = TRUE)
   ) %>%
@@ -334,6 +336,8 @@ train_data <- hitter_data_clean %>%
     avg_launch_speed = mean(launch_speed, na.rm = TRUE),
     avg_launch_angle = mean(launch_angle, na.rm = TRUE),
     avg_hit_distance = mean(hit_distance_sc, na.rm = TRUE),
+    avg_woba_value = mean(woba_value, na.rm = TRUE),
+avg_pitch_number = mean(pitch_number, na.rm = TRUE),
     total_games = n_distinct(game_pk)
   ) %>%
   arrange(batter, season) %>%
@@ -468,7 +472,7 @@ test_results <- test_results %>%
 ```
 
 ```{r}
-#write.csv(test_results, "predicitions_int.csv")
+write.csv(test_results, "predicitions_int.csv")
 ```
 
 ```{r}
