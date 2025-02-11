@@ -358,7 +358,7 @@ test_data <- hitter_data_2024
 
 # Convert to numeric matrix
 X_train <- train_data %>%
-  select(-batter) %>%
+  select(-batter, -total_PA) %>%
   as.matrix()
 
 X_test <- test_data %>%
@@ -367,6 +367,8 @@ X_test <- test_data %>%
 
 y_train <- train_data$total_PA
 ```
+
+
 ```{r}
 
 sapply(train_data, class)
@@ -419,14 +421,14 @@ test_data <- test_data %>%
 
 
 ```{r}
-X_train <- train_data %>% select(-batter) %>% as.matrix()
+X_train <- train_data %>% select(-batter, - total_PA) %>% as.matrix()
 y_train <- train_data$total_PA  # Ensure it's total PA
 
 X_test <- test_data %>% as.matrix()
 
 # Convert to DMatrix
 dtrain <- xgb.DMatrix(data = X_train, label = y_train)
-dtest  <- xgb.DMatrix(data = X_test)
+dtest  <- xgb.DMatrix(data = X_test[, -2])
 
 # Train Model
 xgb_model <- xgb.train(
@@ -453,6 +455,24 @@ test_data$predicted_PA <- predictions_2024
 
 
 ```{r}
+# Calculate SHAP importance
+shap_result_1 <- shap.score.rank(xgb_model = xgb_model, 
+                X_train = X_train,
+                shap_approx = F)
+```
+```{r}
+# Calculate data for SHAP plot
+shap_long_1 = shap.prep(shap = shap_result_1,
+                           X_train = X_train, 
+                           top_n = 8)
+
+
+plot.shap.summary(data_long = shap_long_1)
+```
+
+
+
+```{r}
 # Ensure batter column is added back to the test_data with predictions
 test_results <- hitter_data_2024 %>%
   select(batter) %>%  # Select only the batter column
@@ -466,19 +486,19 @@ test_results %>%
 ```
 
 ```{r}
-test_results <- test_results %>%
-  mutate(predicted_total_PA = predicted_PA * total_games)
+#test_results <- test_results %>%
+#  mutate(predicted_total_PA = predicted_PA * total_games)
 
 ```
 
 ```{r}
-write.csv(test_results, "predicitions_int.csv")
+#write.csv(test_results, "predicitions_int.csv")
 ```
 
 ```{r}
 # Filter batters whose predicted total PA is greater than their PA from last year
 batters_with_increased_PA <- test_results %>%
-  filter(predicted_total_PA > PA_last_year)
+  filter(predicted_PA > PA_last_year)
 
 # Display the filtered results
 print(batters_with_increased_PA)
