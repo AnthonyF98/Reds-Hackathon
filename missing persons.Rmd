@@ -1,0 +1,185 @@
+---
+title: "Untitled"
+author: "Stefan Lechmanik"
+date: "2025-02-15"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+anonymous <- read.csv("C:/Users/stefa/OneDrive/Documents/Reds Project/lahman_people.csv")
+rp <- read.csv("C:/Users/stefa/OneDrive/Documents/Reds Project/RPbattersfacedpredicts.csv")
+sp <- read.csv("C:/Users/stefa/OneDrive/Documents/Reds Project/SPbattersfacedpredicts.csv")
+hitters <- read.csv("C:/Users/stefa/OneDrive/Documents/Reds Project/predicitions_int.csv")
+
+samplesub <- read.csv("C:/Users/stefa/Downloads/sample_submission (1).csv")
+```
+
+
+
+```{r}
+# Load dplyr package
+library(dplyr)
+
+# Assuming your data frames are called df1 and df2
+# Combine the two data frames
+combined_df <- bind_rows(rp, sp)
+
+# Group by PLAYER_ID and get the row with the maximum PLAYING_TIME
+final_df <- combined_df %>%
+  group_by(PLAYER_ID) %>%
+  filter(PLAYING_TIME == max(PLAYING_TIME)) %>%
+  ungroup()
+
+# View the result
+print(final_df)
+
+
+
+
+```
+
+
+```{r}
+bigDF <- bind_rows(final_df, hitters)
+```
+
+```{r}
+final_filtered_df <- bigDF %>%
+  filter(PLAYER_ID %in% samplesub$PLAYER_ID)
+
+# View the result
+print(final_filtered_df)
+```
+
+```{r}
+# Find PLAYER_IDs in sample_submission that are not in final_df
+missing_players <- setdiff(samplesub$PLAYER_ID, bigDF$PLAYER_ID)
+
+# Create a data frame with these missing PLAYER_IDs, if needed
+missing_players_df <- data.frame(PLAYER_ID = missing_players)
+
+# View the result
+print(missing_players_df)
+
+
+
+```
+```{r}
+library(Lahman)
+
+print(People)
+
+people <- People
+```
+
+```{r}
+# Assuming the dataframes are named 'people' and 'anonymous'
+
+# Convert 'birthDate' and 'debut' to Date type in both dataframes
+people$birthDate <- as.Date(people$birthDate)
+anonymous$birthDate <- as.Date(anonymous$birthDate)
+
+people$debut <- as.Date(people$debut)
+anonymous$debut <- as.Date(anonymous$debut)
+
+# Trim any leading/trailing spaces from the columns you're merging on
+people$height <- trimws(people$height)
+anonymous$height <- trimws(anonymous$height)
+
+people$weight <- trimws(people$weight)
+anonymous$weight <- trimws(anonymous$weight)
+
+# Merge the dataframes on height, weight, birthDate, and debut
+merged_df <- merge(
+  anonymous,  # second dataframe (anonymous)
+  people[, c("playerID", "nameGiven","nameFirst", "nameLast", "height", "weight", "birthDate", "debut")],  # Select relevant columns from the first dataframe (people)
+  by = c("height", "weight", "birthDate", "debut"),  # Merge on these columns
+  all.x = TRUE  # Keep all rows from the second dataframe (anonymous)
+)
+
+# Inspect merged data to ensure 'nameGiven' is added
+head(merged_df)
+
+# If there are still NA values in 'nameGiven', check the rows where it is NA
+merged_df[is.na(merged_df$nameGiven), ]
+
+
+```
+
+```{r}
+write.csv(merged_df, "C:/Users/stefa/OneDrive/Documents/Reds Project/playernames.csv")
+```
+
+```{r}
+# Merge the missing players with the merged_df using player_mlb_id and PLAYER_ID
+missing_players_names_df <- merge(
+  missing_players_df,  # Dataframe with missing PLAYER_IDs
+  merged_df[, c("player_mlb_id", "nameFirst", "nameLast")],  # Select relevant columns from merged_df
+  by.x = "PLAYER_ID",  # Merge by PLAYER_ID in missing_players_df
+  by.y = "player_mlb_id",  # Merge by player_mlb_id in merged_df
+  all.x = TRUE  # Keep all missing PLAYER_IDs, even if they don't match in merged_df
+)
+
+# View the result to check if first and last names have been added
+print(missing_players_names_df)
+
+
+
+```
+```{r}
+write.csv(missing_players_names_df, "C:/Users/stefa/OneDrive/Documents/Reds Project/misingplayerswithnames.csv")
+```
+
+
+```{r}
+names <- read.csv("C:/Users/stefa/OneDrive/Documents/Reds Project/playernames.csv")
+sp_preds <- read.csv("C:/Users/stefa/OneDrive/Documents/Reds Project/sp_bf_predictions (1).csv")
+load("2024_stat_cast_data.rda") 
+```
+
+```{r}
+colnames(names)
+```
+
+
+```{r}
+Starter_names_preds <- merge(sp_preds, names[, c("player_mlb_id", "nameFirst", "nameLast")], by.x = "pitcher", by.y = "player_mlb_id", all.x = TRUE)
+```
+
+```{r}
+pitcher_2024 <- read.csv("C:/Users/stefa/OneDrive/Documents/Reds Project/savant_data (3).csv")
+```
+
+```{r}
+
+# Split player_name into nameLast and nameFirst
+pitcher_2024$nameLast <- sapply(strsplit(pitcher_2024$player_name, ", "), function(x) x[1])  # Last name
+pitcher_2024$nameFirst <- sapply(strsplit(pitcher_2024$player_name, ", "), function(x) x[2])  # First name
+
+
+```
+
+
+
+```{r}
+Starter_names_preds_results <- merge(Starter_names_preds, pitcher_2024[, c("nameFirst", "nameLast", "pa")],  by = c("nameFirst", "nameLast"))
+```
+
+
+```{r}
+Starter_names_preds_results$difference <- Starter_names_preds_results$predicted_BF-Starter_names_preds_results$pa
+```
+
+```{r}
+mae <- mean(abs(Starter_names_preds_results$difference))
+print(paste("Mean Absolute Error (MAE):", round(mae, 2)))
+```
+```{r}
+rmse <- sqrt(mean(Starter_names_preds_results$difference^2))
+print(paste("Root Mean Squared Error (RMSE):", round(rmse, 2)))
+```
+
