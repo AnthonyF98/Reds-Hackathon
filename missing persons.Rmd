@@ -175,11 +175,143 @@ Starter_names_preds_results$difference <- Starter_names_preds_results$predicted_
 ```
 
 ```{r}
-mae <- mean(abs(Starter_names_preds_results$difference))
-print(paste("Mean Absolute Error (MAE):", round(mae, 2)))
+
+Starter_names_preds_results_unique <- Starter_names_preds_results %>%
+  distinct(pitcher, .keep_all = TRUE)
+
+
+print(Starter_names_preds_results_unique)
+
 ```
 ```{r}
-rmse <- sqrt(mean(Starter_names_preds_results$difference^2))
+Starter_names_preds_results_unique$difference <- as.integer(Starter_names_preds_results_unique$difference)
+```
+
+
+
+```{r}
+
+if ("difference" %in% colnames(Starter_names_preds_results_unique)) {
+  mae <- mean(abs(Starter_names_preds_results_unique$difference), na.rm = TRUE)
+  print(paste("Mean Absolute Error (MAE):", mae))
+} else {
+  print("The 'difference' column is missing or not numeric.")
+}
+```
+```{r}
+rmse <- sqrt(mean(Starter_names_preds_results_unique$difference^2))
+print(paste("Root Mean Squared Error (RMSE):", round(rmse, 2)))
+```
+```{r}
+rp_preds <- read.csv("C:/Users/stefa/OneDrive/Documents/Reds Project/rp_bf_predictions (1).csv")
+```
+
+
+```{r}
+Reliever_names_preds <- merge(rp_preds, names[, c("player_mlb_id", "nameFirst", "nameLast")], by.x = "pitcher", by.y = "player_mlb_id", all.x = TRUE)
+
+Reliever_names_preds_results <- merge(Reliever_names_preds, pitcher_2024[, c("nameFirst", "nameLast", "pa")],  by = c("nameFirst", "nameLast"))
+
+Reliever_names_preds_results$difference <- Reliever_names_preds_results$predicted_BF-Reliever_names_preds_results$pa
+```
+
+```{r}
+Reliever_names_preds_results_unique <- Reliever_names_preds_results %>%
+  distinct(pitcher, .keep_all = TRUE)
+```
+
+
+```{r}
+if ("difference" %in% colnames(Reliever_names_preds_results_unique)) {
+  mae <- mean(abs(Reliever_names_preds_results_unique$difference), na.rm = TRUE)
+  print(paste("Mean Absolute Error (MAE):", mae))
+} else {
+  print("The 'difference' column is missing or not numeric.")
+}
+```
+```{r}
+rmse <- sqrt(mean(Reliever_names_preds_results_unique$difference^2))
+print(paste("Root Mean Squared Error (RMSE):", round(rmse, 2)))
+```
+
+```{r}
+# Merging Reliever_names_preds_results_unique and Starter_names_preds_results_unique
+merged_df <- merge(Reliever_names_preds_results_unique, 
+                   Starter_names_preds_results_unique, 
+                   by = "pitcher", 
+                   suffixes = c("_reliever", "_starter"))
+
+# Add the predicted_BF values together
+merged_df$combined_predicted_BF <- merged_df$predicted_BF_reliever + merged_df$predicted_BF_starter
+
+# Calculate the new difference between combined predictions and pa
+merged_df$new_difference <- merged_df$combined_predicted_BF - merged_df$pa_reliever  # Assuming 'pa_reliever' is the PA column for relievers
+
+# View the updated data frame
+print(merged_df)
+
+```
+
+```{r}
+# Find common pitchers (duplicates) between the two data frames
+common_pitchers <- intersect(Reliever_names_preds_results_unique$pitcher, 
+                             Starter_names_preds_results_unique$pitcher)
+
+# Remove these common pitchers from both data frames
+Reliever_names_preds_results_unique_no_duplicates <- 
+  Reliever_names_preds_results_unique[!Reliever_names_preds_results_unique$pitcher %in% common_pitchers, ]
+
+Starter_names_preds_results_unique_no_duplicates <- 
+  Starter_names_preds_results_unique[!Starter_names_preds_results_unique$pitcher %in% common_pitchers, ]
+
+# Check the resulting data frames after removing duplicates
+print("Reliever data frame after removing duplicates:")
+print(Reliever_names_preds_results_unique_no_duplicates)
+
+print("Starter data frame after removing duplicates:")
+print(Starter_names_preds_results_unique_no_duplicates)
+
+```
+```{r}
+if ("difference" %in% colnames(Reliever_names_preds_results_unique_no_duplicates)) {
+  mae <- mean(abs(Reliever_names_preds_results_unique_no_duplicates$difference), na.rm = TRUE)
+  print(paste("Mean Absolute Error (MAE):", mae))
+} else {
+  print("The 'difference' column is missing or not numeric.")
+}
+
+```
+
+```{r}
+rmse <- sqrt(mean(Reliever_names_preds_results_unique_no_duplicates$difference^2))
+print(paste("Root Mean Squared Error (RMSE):", round(rmse, 2)))
+```
+
+```{r}
+if ("difference" %in% colnames(Starter_names_preds_results_unique_no_duplicates)) {
+  mae <- mean(abs(Starter_names_preds_results_unique_no_duplicates$difference), na.rm = TRUE)
+  print(paste("Mean Absolute Error (MAE):", mae))
+} else {
+  print("The 'difference' column is missing or not numeric.")
+}
+```
+```{r}
+rmse <- sqrt(mean(Starter_names_preds_results_unique_no_duplicates$difference^2))
+print(paste("Root Mean Squared Error (RMSE):", round(rmse, 2)))
+```
+```{r}
+
+if ("new_difference" %in% colnames(merged_df)) {
+  merged_df$new_difference <- as.numeric(merged_df$new_difference)  
+  mae <- mean(abs(merged_df$new_difference), na.rm = TRUE)  
+  print(paste("Mean Absolute Error (MAE):", mae))
+} else {
+  print("The 'new_difference' column is missing or not numeric.")
+}
+
+```
+```{r}
+rmse <- sqrt(mean(merged_df$new_difference^2))
 print(paste("Root Mean Squared Error (RMSE):", round(rmse, 2)))
 ```
 
