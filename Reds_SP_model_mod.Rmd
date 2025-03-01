@@ -15,6 +15,8 @@ library(tidyr)
 library(xgboost)
 library(dplyr)
 library(caret)
+library(Hmisc)
+library(lubridate)
 ```
 
 # Data Loading and Cleaning
@@ -37,7 +39,7 @@ clean_savant$game_date <- as.Date(clean_savant$game_date) # Convert game_date to
 
 clean_savant_temp <- clean_savant %>%
   arrange(pitcher, game_date) %>%
-  group_by(pitcher) %>%
+  group_by(pitcher, game_year) %>%
   mutate(days_since_last_appearance = as.numeric(difftime(game_date, lag(game_date), units = "days")))
 
 # Clean Lahman Data
@@ -50,9 +52,6 @@ pitchers <- as.data.frame(unique(clean_savant$pitcher)) %>%
   mutate(player_mlb_id = unique(clean_savant$pitcher))
 
 
-
-
-
 pitcher_id_height_weight <- left_join(pitchers, clean_lahman, by = "player_mlb_id") %>%
   na.omit()
 
@@ -63,7 +62,7 @@ pitcher_id_height_weight <- left_join(pitchers, clean_lahman, by = "player_mlb_i
 ```{r}
 # Highest Used Fastball
 by_pitcher <- clean_savant %>%
-  group_by(pitcher) %>%
+  group_by(pitcher, game_year) %>%
   mutate(
     ff_count = sum(pitch_type == "FF", na.rm = TRUE),
     fc_count = sum(pitch_type == "FC", na.rm = TRUE),
@@ -78,20 +77,19 @@ by_pitcher <- clean_savant %>%
     fc_count = NULL,
     si_count = NULL
   ) %>%
-  group_by(pitcher) %>%
+  group_by(pitcher, game_year) %>%
   summarise(highest_used_fb = first(highest_used_fb),.groups = "drop")
 
 # Starting Pitcher Stats (with all calculations)
 sp_pitch_stats <- clean_savant %>%
-  # Recode bb_type: combine line_drive, fly_ball, and popup into Flyball
   mutate(bb_type_grouped = case_when(
     bb_type %in% c("line_drive", "fly_ball", "popup") ~ "Flyball",
     bb_type == "ground_ball" ~ "Groundball",
-    TRUE ~ NA_character_  # Handle missing or other types
+    TRUE ~ NA_character_  
   )) %>%
-  inner_join(by_pitcher, by = "pitcher") %>%
+  inner_join(by_pitcher, by = c("pitcher" = "pitcher", "game_year" = "game_year")) %>%
   filter(sp_indicator == 1, pitch_type == highest_used_fb) %>%
-  group_by(pitcher, highest_used_fb, game_date) %>%
+  group_by(pitcher, highest_used_fb, game_date, game_year) %>%
   summarise(
     avg_release_speed = mean(release_speed, na.rm = TRUE),
     sd_release_speed = sd(release_speed, na.rm = TRUE),
@@ -101,7 +99,7 @@ sp_pitch_stats <- clean_savant %>%
     avg_delta_run_exp_appearance = mean(delta_run_exp, na.rm = TRUE),
     ground_balls = sum(bb_type_grouped == "Groundball", na.rm = TRUE),
     fly_balls = sum(bb_type_grouped == "Flyball", na.rm = TRUE),
-    swinging_strikes = sum(description == "swinging_strike", na.rm = TRUE),  # Count swinging strikes
+    swinging_strikes = sum(description == "swinging_strike", na.rm = TRUE),  
     .groups = "drop"
   ) %>%
   mutate(
@@ -110,12 +108,10 @@ sp_pitch_stats <- clean_savant %>%
       strikes_per_appearance / (strikes_per_appearance + balls_per_appearance),
       0
     ),
-    # Ground Ball to Flyball Ratio
     gb_fb_ratio = ifelse(fly_balls > 0, ground_balls / fly_balls, NA),
-    # Calculate whiff_rate (swinging strikes / total pitches)
     whiff_rate = ifelse(pitches_per_appearance > 0, swinging_strikes / pitches_per_appearance, 0)
   ) %>%
-  group_by(pitcher, highest_used_fb) %>%
+  group_by(pitcher, highest_used_fb, game_year) %>%
   summarise(
     avg_release_speed = mean(avg_release_speed, na.rm = TRUE),
     sd_release_speed = mean(sd_release_speed, na.rm = TRUE),
@@ -128,10 +124,8 @@ sp_pitch_stats <- clean_savant %>%
     total_pitches = sum(pitches_per_appearance, na.rm = TRUE),
     avg_delta_run_exp = mean(avg_delta_run_exp_appearance, na.rm = TRUE),
     sd_delta_run_exp = sd(avg_delta_run_exp_appearance, na.rm = TRUE),
-    # Average and Standard Deviation for GB/FB Ratio
     avg_gb_fb_ratio = mean(gb_fb_ratio, na.rm = TRUE),
     sd_gb_fb_ratio = sd(gb_fb_ratio, na.rm = TRUE),
-    # Average and Standard Deviation for Whiff Rate
     avg_whiff_rate = mean(whiff_rate, na.rm = TRUE),
     sd_whiff_rate = sd(whiff_rate, na.rm = TRUE),
     .groups = "drop"
@@ -142,9 +136,9 @@ sp_pitch_stats <- clean_savant %>%
 
 # Fastball Extension Summary
 sp_fb_extension_summary <- clean_savant %>%
-  inner_join(sp_pitch_stats, by = "pitcher") %>%
+  inner_join(sp_pitch_stats, by = c("pitcher" = "pitcher", "game_year" = "game_year")) %>%
   filter(pitch_type == highest_used_fb) %>%
-  group_by(pitcher, highest_used_fb) %>%
+  group_by(pitcher, highest_used_fb, game_year) %>%
   summarise(
     avg_extension = mean(release_extension, na.rm = TRUE),
     sd_extension = sd(release_extension, na.rm = TRUE),
@@ -152,13 +146,13 @@ sp_fb_extension_summary <- clean_savant %>%
   )
 
 sp_final_summary <- sp_pitch_stats %>%
-  inner_join(sp_fb_extension_summary, by = c("pitcher", "highest_used_fb"))
+  inner_join(sp_fb_extension_summary, by = c("pitcher", "highest_used_fb", "game_year"))
 
 # calculating total batters faced
 total_batters_faced <- clean_savant %>%
-  group_by(pitcher, game_pk) %>%
+  group_by(pitcher, game_pk, game_year) %>%
   summarise(batters_faced = n_distinct(at_bat_number), .groups = "drop") %>% 
-  group_by(pitcher) %>%
+  group_by(pitcher, game_year) %>%
   summarise(total_batters_faced = sum(batters_faced), .groups = "drop")
 
 sp_summary <- left_join(sp_final_summary, total_batters_faced, by = "pitcher")
@@ -175,10 +169,12 @@ summary_with_hw <- merge(
   na.omit()
 
 # calculating age from 2025
-age <- summary_with_hw %>%
+age <- rp_summary_with_hw %>%
   mutate(
-    Age = (2025 - birthYear),
+    Age = (game_year - birthYear),
     debut = as.Date(debut),
+    debut_year = year(as.Date(debut)), 
+    max_xp = (game_year - debut_year), 
     birthDate = as.Date(birthDate),
     debut_age = round(as.numeric((debut - birthDate) / 365.25), 1)
   ) %>% 
@@ -206,20 +202,23 @@ sp_final_summary1 <- merge(
 )
 
 
-temp <- sp_final_summary1 %>% 
+temp11 <- sp_final_summary1 %>% 
   mutate(height_m = height * 0.0254, 
     weight_kg = weight * 0.453592, 
-    bmi = weight_kg / (height_m^2))
-
+    bmi = weight_kg / (height_m^2), 
+    BF_last_year = total_batters_faced) %>% 
+  rename(game_year = game_year.y) %>% 
+  distinct(pitcher, highest_used_fb, game_year,.keep_all = TRUE) %>%
+  select(-game_year.x)
 ```
 
 ```{r}
 # Assuming 'temp' is your data frame
-features1 <- temp %>%
-  select(-pitcher, -highest_used_fb, -total_batters_faced, -n_appearances, -n, -total_pitches, -`unique(clean_savant$pitcher)`) %>% 
+features1 <- temp11 %>%
+  select(-pitcher, -highest_used_fb, -total_batters_faced, -n_appearances, -n, -total_pitches, -`unique(clean_savant$pitcher)`, -debut, -BF_last_year) %>% 
   na.omit()
 
-target <- temp$total_batters_faced
+target <- temp11$total_batters_faced
 
 # Convert to matrix for XGBoost (important: handle potential character columns)
 features_matrix <- data.matrix(features1) # Use data.matrix for efficient conversion
@@ -280,3 +279,225 @@ xgb.plot.importance(importance_matrix)
 # Print more detailed feature importance
 print(importance_matrix)
 ```
+
+
+```{r}
+temp_12 <- temp11 %>%
+  arrange(pitcher, game_year)
+
+temp_12$bf_next <- Lag(temp_12$total_batters_faced, -1) 
+
+temp_12$bf_next[which(temp_12$pitcher != Lag(temp_12$pitcher, -1))] <- NA
+```
+
+```{r}
+sp_24 <- temp11 %>% 
+  filter(game_year == 2023) %>% 
+  select(-total_batters_faced)
+
+sp_24temp <- sp_24 %>%
+  arrange(pitcher, game_year) %>%  # Arrange by pitcher and year
+  mutate(BF_last_year = lag(BF_last_year, order_by = game_year))
+```
+
+```{r}
+sp_24$bf_next <- Lag(sp_24$totsl)
+```
+
+
+
+
+```{r}
+train_data <- temp_12 %>%
+  filter(game_year < 2022)
+
+test_data <- temp_12 %>% 
+  filter(game_year == 2022)
+
+
+# %>%
+#   arrange(pitcher, game_year) %>%  # Arrange by pitcher and year
+#   mutate(BF_last_year = lag(BF_last_year, order_by = game_year)) %>% 
+#   filter(game_year != 2021) %>% 
+#   ungroup()
+
+
+# Ensure train_data is a proper dataframe before converting to matrix
+train_data <- train_data %>%
+  ungroup() %>%  # Remove any grouping structure
+  as.data.frame()  # Ensure it's a dataframe
+
+
+#test_data <- sp_24 
+
+# Convert to numeric matrix
+X_train <- train_data %>%
+  select(-pitcher, -bf_next) %>%
+  as.matrix()
+
+X_test <- test_data %>%
+  select(-pitcher) %>%
+  as.matrix()
+
+y_train <- train_data$bf_next
+```
+
+
+```{r}
+
+sapply(train_data, class)
+
+```
+
+
+```{r}
+train_features <- colnames(train_data %>% select(-pitcher))
+test_features  <- colnames(test_data)
+
+print(setdiff(train_features, test_features))  # Features in train but not test
+print(setdiff(test_features, train_features))  # Features in test but not train
+
+missing_cols <- setdiff(train_features, test_features)
+for (col in missing_cols) {
+  test_data[[col]] <- NA  # Add missing columns with NA
+}
+
+extra_cols <- setdiff(test_features, train_features)
+test_data <- test_data %>% select(-all_of(extra_cols))
+
+# Ensure correct column order
+test_data <- test_data %>% select(all_of(train_features))
+
+```
+
+```{r}
+missing_cols <- setdiff(train_features, test_features)
+
+for (col in missing_cols) {
+  test_data[[col]] <- NA  # Add missing columns with NA
+}
+
+extra_cols <- setdiff(test_features, train_features)
+
+#test_data <- test_data %>% select(-all_of(extra_cols))
+
+test_data <- test_data %>%
+  select(all_of(train_features))  # Reorder test_data to match train_data
+
+```
+
+```{r}
+test_data <- test_data %>%
+  select(all_of(colnames(train_data %>% select(-pitcher))))
+
+```
+
+
+
+```{r}
+train_data <- train_data %>% mutate_if(is.character, as.factor) %>% mutate_if(is.factor, as.numeric)
+test_data <- test_data %>% mutate_if(is.character, as.factor) %>% mutate_if(is.factor, as.numeric)
+
+# Select features and target, convert to matrices
+X_train <- train_data %>% select(-pitcher, -BF_last_year, -highest_used_fb, -`unique(clean_savant$pitcher)`, -debut, -birthDate) %>% as.matrix()
+y_train <- train_data$BF_last_year
+X_test <- test_data %>% select(-BF_last_year, -highest_used_fb, -`unique(clean_savant$pitcher)`, -debut, -birthDate) %>% as.matrix()
+
+# Create DMatrix objects
+dtrain <- xgb.DMatrix(data = X_train, label = y_train)
+dtest <- xgb.DMatrix(data = X_test)
+
+# Train Model
+xgb_model <- xgb.train(
+  params = list(
+    objective = "reg:squarederror",
+    eval_metric = "rmse",
+    eta = 0.05,
+    max_depth = 10
+  ),
+  data = dtrain,
+  nrounds = 100,
+  watchlist = list(train = dtrain),
+  early_stopping_rounds = 10,
+  verbose = 1
+)
+
+# Predict
+predictions_2024 <- predict(xgb_model, newdata = dtest)
+
+# Add predictions to test data
+test_data$predicted_BF <- predictions_2024
+```
+
+
+```{r}
+source("C:/Users/Drew Duffy/Downloads/a_insights_shap_functions (2).r", echo=TRUE)
+
+```
+
+
+
+```{r}
+# Calculate SHAP importance
+shap_result <- shap.score.rank(xgb_model = xgb_model, 
+                X_train =X_train,
+                shap_approx = F)
+```
+```{r}
+# Calculate data for SHAP plot
+shap_long = shap.prep(shap = shap_result,
+                           X_train = X_train, 
+                           top_n = 10)
+```
+
+
+
+
+```{r}
+# Generate SHAP plot
+plot.shap.summary(data_long = shap_long)
+```
+
+
+```{r}
+test_data$predicted_BF <- predictions_2024
+
+
+cleanyy <- test_data %>%
+  select(debut, birthDate, predicted_BF)
+
+
+bf_ <- merge(cleanyy, temp_12, by.x = c("debut", "birthDate")) 
+
+
+pitcher111111 <- test_data %>% 
+  distinct(`unique(clean_savant$pitcher)`, predicted_BF)
+
+final <- temp_12 %>% 
+  filter(game_year == 2023) %>% 
+  select(pitcher)
+
+
+test_results <- final %>%
+  select(pitcher) %>%  # Select only the batter column
+  bind_cols(test_data) 
+
+
+
+
+battersfaced <- bf_ %>% 
+  select(pitcher, predicted_BF) %>% 
+  distinct(pitcher, predicted_BF)
+
+write.csv(battersfaced, "C://Users/Drew Duffy/Downloads/sp_bf_predictions.csv")
+```
+
+
+
+
+
+
+
+
+
+
